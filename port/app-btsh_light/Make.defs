@@ -1,0 +1,10 @@
+############################################################################
+# apps/wireless/bluetooth/btsh_light/Make.defs
+#
+# 由 OpenvelaESP-BTSH 项目编写
+#
+############################################################################
+
+ifneq ($(CONFIG_BTSH_LIGHT),)
+CONFIGURED_APPS += $(APPDIR)/wireless/bluetooth/btsh_light
+endif

@@ -1,0 +1,22 @@
+# ---- 大型第三方资料 / 工具产物，不入库 ----
+Openvela-doc/
+schematic-crops/
+/tools/
+
+# ---- 构建与调试产物 ----
+*.log
+*.hex
+boot.log
+__pycache__/
+*.pyc
+.tmpconfig*
+
+# ---- 系统文件 ----
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---- 编辑器 ----
+.vscode/
+.idea/
+*.swp

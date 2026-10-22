@@ -1,0 +1,73 @@
+#
+# apps/wireless/bluetooth/btsh_light/Kconfig
+#
+# 由 OpenvelaESP-BTSH 项目编写
+#
+# BLE GATT 灯控服务（下位机 GATT Server）
+#
+
+config BTSH_LIGHT
+	tristate "BLE GATT light control service"
+	default n
+	depends on WIRELESS_BLUETOOTH_HOST
+	---help---
+		Enable the BLE GATT light control service for the
+		Openvela-ESP32S3-Buletooth-SmartHome project.
+
+		It registers a custom GATT service (0xFF00) with:
+		  0xFF01  light command   (WRITE)
+		  0xFF02  light state     (READ + NOTIFY)
+		  0xFF03  device info     (READ)
+
+		NSH usage: btsh_light <start|stop|state>
+
+if BTSH_LIGHT
+
+config BTSH_LIGHT_PROGNAME
+	string "Program name"
+	default "btsh_light"
+	---help---
+		The name of the program that will be used when the NSH ELF
+		program is installed.
+
+config BTSH_LIGHT_PRIORITY
+	int "btsh_light task priority"
+	default 100
+
+config BTSH_LIGHT_STACKSIZE
+	int "btsh_light stack size"
+	default 4096
+	---help---
+		BLE GATT 操作需要一定栈空间，4096 是实测可用值。
+
+config BTSH_LIGHT_LED_COUNT
+	int "Number of WS2812B LEDs on the strip"
+	default 5
+	range 1 1024
+	---help---
+		How many addressable LEDs the GATT light service drives.
+		Must match the board's WS2812 LED count.
+
+config BTSH_LIGHT_ADV_NAME
+	string "BLE advertising name"
+	default "BTSH-LIGHT"
+	---help---
+		广播与扫描响应里显示的设备名。
+
+		建议改成本项目专属名字，便于在手机/A7Z 上辨认，例如：
+		  BTSH-LIGHT-A1F2
+
+config BTSH_LIGHT_LED_DEV
+	string "Status LED device path"
+	default "/dev/leds0"
+	---help---
+		用于指示灯状态的设备节点。
+
+		当前阶段把"灯"映射到板载 WS2812B 状态灯
+		（由 CONFIG_WS2812 注册为 /dev/leds0），便于无外接
+		硬件时验证 GATT 链路。
+
+		接入继电器后，应改为由独立的应用/GPO 驱动，
+		并修改 btsh_light_apply() 的实现。
+
+endif # BTSH_LIGHT
