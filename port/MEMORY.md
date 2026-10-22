@@ -162,6 +162,63 @@ make -j20 EXTRAFLAGS="-Wno-cpp -Wno-deprecated-declarations"
 - 广播总长 11 字节（上限 31），未超限
 - Company ID `0xFFFF` 是 BT SIG 测试保留值，量产必须申请正式 ID
 
+### 4.6 补记：广播名字被协议栈抢先设置（v1.1 调试发现）
+
+现象：手机和 PC 都把本板显示成 **`NuttX`**，且扫描结果里看不到厂商数据。
+
+排查结论（内核 dump 实证，`BTSH_ADV_DUMP: adv len=11 [02010607ffffff01010507]`）：
+
+**广播内容是正确发出的**，显示 `NuttX` 是两件事叠加：
+
+1. **NuttX 自己会抢先广播一次**
+   `bt_initialize()` → `bt_netdev_register()` → `bt_add_services()` 里就调用了
+
+   ```c
+   bt_start_advertising(BT_LE_ADV_IND, g_ad, g_sd);
+   ```
+
+   而 `g_sd` 用的是 **`CONFIG_DEVICE_LOCAL_NAME`**（默认 `"NuttX"`），
+   并且 `.len = 16` 是**硬编码**的（名字只有 6 字节，是畸形扫描响应）。
+   我们的应用随后覆盖它，所以最终在空口上是对的——但中心设备一旦在
+   覆盖之前扫到过一次，就会把 `NuttX` 缓存下来。
+
+2. **两个"设备名"配置是分开的**
+
+   | 配置 | 默认值 | 用途 |
+   |---|---|---|
+   | `CONFIG_DEVICE_LOCAL_NAME` | `"NuttX"` | **广播用**（bt_services.c 的 g_sd） |
+   | `CONFIG_DEVICE_NAME` | `"Apache NuttX"` | GAP 设备名特征 0x2A00 |
+
+   两个都必须在 defconfig 里显式设成 `"BTSH-LIGHT"`，否则永远显示默认名。
+
+3. **Windows / Android 都会缓存广播内容与设备名**
+   只要之前扫到过旧广播，即使固件已修正，它们仍可能显示旧内容，
+   直到缓存过期、设备被"忘记"，或换一台没连过它的机器。
+
+### 4.7 补记：`wlerr` 默认是空宏（排查教训）
+
+```c
+#ifdef CONFIG_DEBUG_WIRELESS_ERROR
+#  define wlerr   _err
+#else
+#  define wlerr   _none      /* 什么都不打印 */
+#endif
+```
+
+`CONFIG_DEBUG_WIRELESS_ERROR` 依赖 `CONFIG_DEBUG_FEATURES`。
+我在 defconfig 里加了 `CONFIG_DEBUG_WIRELESS_ERROR=y` 却没加 `DEBUG_FEATURES`，
+结果被 kconfig **静默丢弃**，`wlerr` 仍是空宏——表现为
+"固件里能 `strings` 到日志字符串，但串口一个字都不打"。
+
+**诊断工具**：`port/tools/patch_adv_dump.sh`（改用 `syslog(LOG_ERR)` 绕开开关），
+配合 `port/defconfig-advdiag` 可复现本次排查：
+
+```
+BTSH_ADV_DUMP: adv len=11 [02010607ffffff01010507]
+BTSH_ADV_DUMP: rsp len=12 [0b09425453482d4c49474854]
+```
+
+
 ### 4.4 已知遗留问题
 
 | 问题 | 影响 | 建议 |

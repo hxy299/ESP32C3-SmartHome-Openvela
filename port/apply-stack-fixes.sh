@@ -180,6 +180,14 @@ if 'CONFIG_SYSLOG_CONSOLE' not in s:
 if 'CONFIG_BLUETOOTH_CNTRL_HOST_FLOW_DISABLE' not in s:
     s = s.replace('# CONFIG_BLUETOOTH_CNTRL_HOST_FLOW_DISABLE is not set\n', '')
     s = s.rstrip() + '\nCONFIG_BLUETOOTH_CNTRL_HOST_FLOW_DISABLE=y\n'
+# 设备名：NuttX 初始化时会用它自己的默认名（DEVICE_LOCAL_NAME="NuttX"）
+# 抢先广播一次，中心设备会缓存这个名字，导致显示成 NuttX。
+# 两个都要改：LOCAL_NAME 用于广播，DEVICE_NAME 用于 GAP 设备名特征。
+for key, val in (('DEVICE_LOCAL_NAME', '"BTSH-LIGHT"'),
+                 ('DEVICE_NAME', '"BTSH-LIGHT"')):
+    if 'CONFIG_%s=' % key not in s:
+        s = s.rstrip() + '\nCONFIG_%s=%s\n' % (key, val)
+
 s = re.sub(r'^CONFIG_BLUETOOTH_MAX_CONN=\d+$', 'CONFIG_BLUETOOTH_MAX_CONN=8', s, flags=re.M)
 if 'CONFIG_BLUETOOTH_MAX_CONN=' not in s:
     s = s.rstrip() + '\nCONFIG_BLUETOOTH_MAX_CONN=8\n'

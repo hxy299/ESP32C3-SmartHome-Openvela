@@ -723,6 +723,8 @@ nuttx-production.bin   429,376 字节   sha256 fa6e7eb7da02b4fd…
 ```
 CONFIG_ESPRESSIF_USBSERIAL=y                    # USB 控制台，一根 Type-C 搞定烧录+日志
 CONFIG_SYSLOG_CONSOLE=y                         # syslog 输出到控制台
+CONFIG_DEVICE_LOCAL_NAME="BTSH-LIGHT"           # ★ 广播名（默认 "NuttX"）
+CONFIG_DEVICE_NAME="BTSH-LIGHT"                 # ★ GAP 设备名特征（默认 "Apache NuttX"）
 CONFIG_BLUETOOTH_CNTRL_HOST_FLOW_DISABLE=y      # ★ 关流控，否则 ACL 收不到
 CONFIG_BLUETOOTH_MAX_CONN=8                     # ★ 本树 bt_conn 回收有缺陷，放宽槽位
 CONFIG_ESP32C3_GENERIC_BTSH_AUTOSTART=y         # 开机自动广播
