@@ -642,6 +642,26 @@ btlight-auto  : 三处 defconfig 完全一致
 
 ---
 
+## 8.5 广播能力声明（v1.1 新增）
+
+广播数据里除了 Flags，还带一段**厂商自定义数据**，让中心设备不连接即可识别：
+
+```
+02 01 06                 ← Flags
+07 FF FF FF 01 01 05 07  ← 厂商数据：CompanyID 0xFFFF | ver 1 | 类型 1(灯控) | 5 灯 | caps 0x07
+```
+
+能力位：bit0 开关 / bit1 逐灯RGB / bit2 通知。
+
+对应代码：`BTSH_DISCOVERY_ADV`（应用源码）。串口会打印：
+
+```
+BTSH: discovery adv: company=0xffff ver=1 type=1 leds=5 caps=0x07
+```
+
+中心设备侧解析见 `BLE_PROTOCOL_A7Z.md` §10。
+
+
 ## 9. 硬件实测记录（2026-10-22，首次上板）
 
 板子焊好、首次通电后的完整调试过程与结果。**这一节是"代码能编译"和"板子真能跑"之间的全部差距。**
@@ -687,6 +707,7 @@ btlight-auto  : 三处 defconfig 完全一致
 
 ```bash
 bash port/apply-stack-fixes.sh      # 三个协议栈修复 + production 配置，幂等
+bash port/apply-discovery-adv.sh    # v1.1 广播能力声明（免连接识别），幂等
 ./build.sh vendor/espressif/boards/esp32c3/esp32c3-generic/configs/production/ -j20
 ```
 

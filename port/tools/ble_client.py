@@ -234,19 +234,83 @@ async def cmd_selftest(client: BleakClient):
 
 
 # ---------------------------------------------------------------------------
+# 广播里的"能力声明"解析（对应固件的 BTSH_DISCOVERY_ADV）
+# ---------------------------------------------------------------------------
+
+BTSH_COMPANY_ID = 0xFFFF
+BTSH_DEVTYPE = {1: "RGB灯控"}
+
+
+def decode_btsh_adv(adv):
+    """从广播数据里解析本项目的厂商自定义数据。
+
+    固件布局（蓝牙 EIR Manufacturer Specific Data）：
+        FF FF | ver(1) | devtype(1) | led_count(1) | caps(1)
+    bleak 会把前 2 字节的 Company ID 做成字典 key，所以 payload 只剩 4 字节。
+    """
+
+    if adv is None:
+        return None
+
+    md = getattr(adv, "manufacturer_data", None) or {}
+    payload = md.get(BTSH_COMPANY_ID)
+    if not payload or len(payload) < 4:
+        return None
+
+    ver, dtype, leds, caps = payload[0], payload[1], payload[2], payload[3]
+    feats = []
+    if caps & 0x01:
+        feats.append("开关")
+    if caps & 0x02:
+        feats.append("逐灯RGB")
+    if caps & 0x04:
+        feats.append("通知")
+
+    return ("识别: {} 协议v{} {}灯 能力={}"
+            .format(BTSH_DEVTYPE.get(dtype, "类型%d" % dtype),
+                    ver, leds, ",".join(feats) or "无"))
+
+
+async def scan_with_adv(timeout):
+    """返回 [(device, advertisement_data|None), ...]，兼容新旧 bleak。"""
+
+    try:
+        res = await BleakScanner.discover(timeout=timeout, return_adv=True)
+        return list(res.values())
+    except TypeError:
+        devs = await BleakScanner.discover(timeout=timeout)
+        return [(d, None) for d in devs]
+
+
+# ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
 
 async def run(args):
     if args.scan:
         print(f"扫描 {args.scan:.0f}s ...")
-        devs = await BleakScanner.discover(timeout=args.scan)
-        if not devs:
+        pairs = await scan_with_adv(args.scan)
+        if not pairs:
             print("没扫到任何 BLE 设备（检查蓝牙适配器）")
             return 0
-        for d in sorted(devs, key=lambda x: -(x.rssi or -999)):
-            mark = "  <-- BTSH" if (d.name or "").upper().startswith("BTSH") else ""
-            print(f"  {d.address}  rssi={d.rssi:4}  {d.name}{mark}")
+
+        def _rssi(pair):
+            d, adv = pair
+            return (getattr(adv, "rssi", None) or d.rssi or -999)
+
+        for d, adv in sorted(pairs, key=_rssi):
+            name = (d.name or (getattr(adv, "local_name", None) if adv else None) or "")
+            rssi = _rssi((d, adv))
+            mark = "  <-- BTSH" if name.upper().startswith("BTSH") else ""
+            print(f"  {d.address}  rssi={rssi:4}  {name}{mark}")
+
+            info = decode_btsh_adv(adv)
+            if info:
+                print(f"      +- {info}")
+            elif adv is not None and getattr(adv, "manufacturer_data", None):
+                raw = {k: v.hex() for k, v in adv.manufacturer_data.items()}
+                print(f"      +- 厂商数据 {raw}")
+
         return 0
 
     target, _ = await find_device(args.name, args.address, args.timeout)

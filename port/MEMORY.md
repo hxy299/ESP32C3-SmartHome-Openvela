@@ -26,6 +26,7 @@
 | BLE GATT 服务 | ✅ | 手机 nRF Connect 完整发现并读写 |
 | 逐灯 RGB | ✅ | 写 `00 40 00 00` → 第 1 颗变红 |
 | 通知（Notify） | ✅ | 开启 CCC 后能收到状态变化 |
+| 广播能力声明（v1.1） | ✅ | 广播内含厂商数据，中心设备免连接识别 |
 | A7Z 对接 | ⏳ | C3 侧已就绪，A7Z 侧待开发（见 `A7Z_HANDOFF.md`） |
 
 **最终固件**：`nuttx-production.bin`，429,376 字节，sha256 `fa6e7eb7da02b4fd…`，出厂自检 35 项全绿。
@@ -143,6 +144,23 @@ make -j20 EXTRAFLAGS="-Wno-cpp -Wno-deprecated-declarations"
 | 19 | **`gatt_ccc_changed()` 调用 `cfg_changed` 不检查 NULL** | 客户端一**开启 NOTIFY（写 CCC）** 就 `Instruction access fault, EPC=00000000` 整机 PANIC | 应用传真实回调 + 协议栈加 NULL 保护 |
 
 > 第 19 条正是原作者在 ESP32-S3 上踩过的同一个坑（他的注释里记着 `write_ccc → rst:0x13`）。
+
+
+### 4.5 v1.1 新增：广播能力声明
+
+在 ADV_IND 里加了 Manufacturer Specific Data（6 字节）：
+
+```
+07 FF | FF FF | 01 | 01 | 05 | 07
+        CompanyID ver 类型  灯数 能力位
+```
+
+- 目的：中心设备**不连接**即可识别设备类型/能力（对应官方宣传的"无缝发现"）
+- 实现：`btsh_light_main.c` 的 `BTSH_DISCOVERY_ADV` 段，`g_adv_data[3]`
+- **关键点**：`bt_eir_s.len` = 1(type) + 数据字节数；6 字节数据必须写 `len = 7`。
+  写错会导致整条广播失效、设备直接不可见。
+- 广播总长 11 字节（上限 31），未超限
+- Company ID `0xFFFF` 是 BT SIG 测试保留值，量产必须申请正式 ID
 
 ### 4.4 已知遗留问题
 

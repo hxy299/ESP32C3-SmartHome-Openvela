@@ -58,7 +58,6 @@
 #include <unistd.h>
 
 #include <nuttx/wireless/bluetooth/bt_core.h>
-#include <nuttx/wqueue.h>
 
 /* BTSH_EXTERN_ADV_API
  *
@@ -167,6 +166,30 @@ void bt_conn_cb_register(FAR struct bt_conn_cb_s *cb);
 #  define CONFIG_BTSH_LIGHT_ADV_NAME "BTSH-LIGHT"
 #endif
 
+/* BTSH_DISCOVERY_ADV —— 广播里的"能力声明"
+ *
+ * 目的：让中心设备（A7Z）**不用连接**就知道对端是什么、能做什么，
+ *       实现"扫到即识别、免配置连接"的体验。
+ *
+ * 载荷布局（6 字节，放在 Manufacturer Specific Data 里）：
+ *   [0..1] Company ID  = 0xFFFF（小端）
+ *          ★ BT SIG 保留给测试/开发用途；量产必须申请正式 Company ID
+ *   [2]    协议版本    = 1
+ *   [3]    设备类型    = 1（RGB 灯控）
+ *   [4]    灯珠数量    = CONFIG_BTSH_LIGHT_LED_COUNT
+ *   [5]    能力位      = 0x07
+ *            bit0  支持 1 字节开关
+ *            bit1  支持 4 字节逐灯 RGB
+ *            bit2  支持状态通知
+ */
+
+#define BTSH_DISC_COMPANY_ID_LO   0xff
+#define BTSH_DISC_COMPANY_ID_HI   0xff
+#define BTSH_DISC_VER             1
+#define BTSH_DISC_DEVTYPE_LIGHT   1
+#define BTSH_DISC_CAPS            0x07
+#define BTSH_DISC_LEN             6      /* 上面 6 个字节 */
+
 /* 板载 WS2812 设备节点与颜色 */
 
 #ifndef CONFIG_BTSH_LIGHT_LED_DEV
@@ -217,7 +240,7 @@ static int     g_led_fd      = -1;
  * 「type 长度(1) + 数据长度」，这是 S3 阶段从 btsak 的缺陷中学到的。
  */
 
-static struct bt_eir_s g_adv_data[2];
+static struct bt_eir_s g_adv_data[3];   /* flags + 厂商数据 + 终止项 */
 static struct bt_eir_s g_scan_rsp[2];
 
 /* GATT 属性表 */
@@ -335,6 +358,24 @@ static void btsh_light_apply(uint8_t state);
  * Private Data (GATT 属性表)
  ****************************************************************************/
 
+/****************************************************************************
+ * Name: btsh_ccc_changed
+ *
+ * Description:
+ *   CCC（客户端特征配置）变化回调。
+ *
+ *   ★ 必须传真实函数，不能传 NULL：
+ *     NuttX 的 gatt_ccc_changed() 会直接调用 ccc->cfg_changed(value)，
+ *     没有 NULL 检查。传 NULL 时，客户端一写 CCC（开启通知）就会
+ *     跳到地址 0 -> Instruction access fault (EPC=00000000) 整机 PANIC。
+ *
+ ****************************************************************************/
+
+static void btsh_ccc_changed(uint16_t value)
+{
+  syslog(LOG_INFO, "BTSH: CCC changed -> 0x%04x\n", value);
+}
+
 static const struct bt_gatt_attr_s g_attrs[] =
 {
   BT_GATT_PRIMARY_SERVICE(BTSH_SVC_HANDLE, &g_svc_uuid),
@@ -354,7 +395,7 @@ static const struct bt_gatt_attr_s g_attrs[] =
                      btsh_read_state, NULL, NULL),
   /* 第 3 个参数必须是**数组**（对应每个对端的订阅配置） */
   BT_GATT_CCC(BTSH_STATE_CCC_HANDLE, BTSH_STATE_VAL_HANDLE,
-              g_state_ccc_cfg, NULL),
+              g_state_ccc_cfg, btsh_ccc_changed),
 
   /* 设备信息：只读 3 字节 */
 
@@ -687,31 +728,7 @@ static int btsh_write_cmd(FAR struct bt_conn_s *conn,
 static bool   g_adv_enabled  = false;
 static bool   g_gatt_registered = false;
 static bool   g_conn_cb_done = false;
-static struct work_s         g_readv_work;
 static struct bt_conn_cb_s   g_conn_cb;
-
-/* 在 LPWORK 上重播（不能在 BT 接收线程里直接发 HCI 命令） */
-
-static void btsh_light_readv_worker(FAR void *arg)
-{
-  int ret;
-
-  if (!g_adv_enabled)
-    {
-      return;
-    }
-
-  (void)bt_stop_advertising();
-  ret = bt_start_advertising(BT_LE_ADV_IND, g_adv_data, g_scan_rsp);
-  if (ret < 0)
-    {
-      syslog(LOG_ERR, "BTSH: re-advertise failed: %d\n", ret);
-    }
-  else
-    {
-      syslog(LOG_INFO, "BTSH: re-advertising after disconnect\n");
-    }
-}
 
 static void btsh_light_connected_cb(FAR struct bt_conn_s *conn,
                                     FAR void *context)
@@ -724,8 +741,12 @@ static void btsh_light_disconnected_cb(FAR struct bt_conn_s *conn,
 {
   /* 内核注释明确要求不可假定本回调的线程上下文 */
 
+  /* BTSH_NO_DUP_READV: 协议栈的 hci_disconn_complete() 已经会在断开后
+   * 自动重新使能广播（看 g_btdev.adv_enable 那段），所以这里只记录日志。
+   * 之前这里再发一次 stop/start，会和协议栈的 LE_SET_ADV_ENABLE 打架。
+   */
+
   syslog(LOG_INFO, "BTSH: central disconnected\n");
-  (void)work_queue(LPWORK, &g_readv_work, btsh_light_readv_worker, NULL, 0);
 }
 
 static int btsh_light_start(void)
@@ -765,8 +786,25 @@ static int btsh_light_start(void)
   g_adv_data[0].len     = 2;
   g_adv_data[0].type    = BT_EIR_FLAGS;
   g_adv_data[0].data[0] = BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR;
-  g_adv_data[1].len     = 0;
-  g_adv_data[1].type    = 0;
+
+  /* 厂商自定义数据：不连接即可识别设备类型与能力
+   *
+   * ★ len 的语义：EIR 长度字段 = 1(type) + 数据字节数。
+   *   协议栈内部 memcpy 拷 len+1 字节，其中最后一条是 type，
+   *   所以 6 字节数据必须写 len = 7。
+   */
+
+  g_adv_data[1].len     = 1 + BTSH_DISC_LEN;
+  g_adv_data[1].type    = BT_EIR_MANUFACTURER_DATA;
+  g_adv_data[1].data[0] = BTSH_DISC_COMPANY_ID_LO;
+  g_adv_data[1].data[1] = BTSH_DISC_COMPANY_ID_HI;
+  g_adv_data[1].data[2] = BTSH_DISC_VER;
+  g_adv_data[1].data[3] = BTSH_DISC_DEVTYPE_LIGHT;
+  g_adv_data[1].data[4] = CONFIG_BTSH_LIGHT_LED_COUNT;
+  g_adv_data[1].data[5] = BTSH_DISC_CAPS;
+
+  g_adv_data[2].len     = 0;
+  g_adv_data[2].type    = 0;
 
   /* 扫描响应里放完整设备名 */
   /*
@@ -825,6 +863,14 @@ static int btsh_light_start(void)
 
   syslog(LOG_INFO, "BTSH: advertising as \"%s\"\n",
          CONFIG_BTSH_LIGHT_ADV_NAME);
+
+  /* 打印广播里的能力声明，便于现场核对 A7Z 扫描到的内容 */
+
+  syslog(LOG_INFO,
+         "BTSH: discovery adv: company=0x%02x%02x ver=%d type=%d leds=%d caps=0x%02x\n",
+         BTSH_DISC_COMPANY_ID_HI, BTSH_DISC_COMPANY_ID_LO,
+         BTSH_DISC_VER, BTSH_DISC_DEVTYPE_LIGHT,
+         CONFIG_BTSH_LIGHT_LED_COUNT, BTSH_DISC_CAPS);
   return OK;
 }
 

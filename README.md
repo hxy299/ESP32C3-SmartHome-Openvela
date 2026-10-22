@@ -19,6 +19,7 @@
 | 控制台 | **USB-Serial-JTAG**（一根 Type-C 即可，无需 USB-TTL） |
 | BLE | Peripheral / GATT Server，广播名 `BTSH-LIGHT` |
 | 服务 | 自定义 16 位 UUID `0xFF00`（命令 / 状态 / 信息 + 通知） |
+| 发现 | 广播内含厂商自定义数据，**不连接即可识别**设备类型与能力 |
 | 固件大小 | 429,376 字节 |
 
 **核心能力**：`nsh` 命令台 + 开机自动广播 + 开关灯 + **逐灯 RGB** + 状态通知。
@@ -63,8 +64,9 @@ BTSH: advertising as "BTSH-LIGHT"
 
 ```bash
 # 1. 应用移植改动（幂等，可重复执行）
-bash port/apply-all.sh            # 板级移植（16 步）
-bash port/apply-stack-fixes.sh    # 三个协议栈修复（4 步）
+bash port/apply-all.sh             # 板级移植（16 步）
+bash port/apply-stack-fixes.sh     # 三个协议栈修复（4 步）
+bash port/apply-discovery-adv.sh   # v1.1 广播能力声明（免连接识别）
 
 # 2. 构建
 export PATH=$HOME/openvela/prebuilts/build-tools/linux-x86_64/bin:$HOME/.local/bin:$HOME/tc-bin:$HOME/riscv32-esp-elf/bin:$PATH
@@ -96,6 +98,7 @@ bash port/tools/check_firmware.sh     # 期望 PASS=35  FAIL=0
     ├── A7Z_HANDOFF.md            ★ A7Z 开发交接报告
     ├── apply-all.sh              一键重放板级移植（幂等）
     ├── apply-stack-fixes.sh      一键重放协议栈修复（幂等）
+    ├── apply-discovery-adv.sh    v1.1 广播能力声明（幂等）
     ├── defconfig-production      实测有效的生产配置
     ├── nuttx-production.bin      ★ 实测可用的固件
     ├── flash.ps1                 Windows 一键烧录
@@ -148,6 +151,7 @@ bash port/tools/check_firmware.sh     # 期望 PASS=35  FAIL=0
 | 开启通知（写 CCC） | ✅ |
 | 写 4 字节 RGB | ✅ 第 1 颗灯变红 |
 | 状态通知 | ✅ |
+| 广播能力声明（v1.1） | 编译通过，待烧录复核 |
 
 **上板才发现的 3 个协议栈 bug**（全部已修，见 [port/README.md](port/README.md) §9）：
 

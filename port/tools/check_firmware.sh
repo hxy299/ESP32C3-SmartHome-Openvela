@@ -161,6 +161,7 @@ sec "[5] 功能要素（字符串级）"
 check_str 'BTSH-LIGHT'
 check_str 'WS2812 self-test'
 check_str 'Usage: btsh_light <start|stop|state|test>'
+check_str 'BTSH: discovery adv'        # 广播能力声明（v1.1 免连接识别）
 check_str 'BTSH: CCC changed'          # CCC 回调存在 = 开通知不会崩
 check_str 'BTSH: central disconnected'  # 连接状态回调存在
 check_str 'rgb write failed'
