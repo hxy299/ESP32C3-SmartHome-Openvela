@@ -376,12 +376,59 @@ while (conn->state == BT_CONN_CONNECTED)
    是 Windows 适配器在频繁连断后卡住了。重跑即 12/12。
 
 
+### 4.10 更正：USB 控制台输入其实是正常的
+
+之前把"USB 控制台不能输入"列为已知限制，**这个结论是错的**。
+
+实测（`port/tools/serial_cmd.py`，v1.1 最终固件）：
+
+```
+$ python tools/serial_cmd.py -p COM6 -c "help"
+=== 回应 ===
+Builtin Apps:
+    bt            btsh_light    nsh           sh
+nsh>
+=== 判定 ===
+  命令被回显 : ✅
+  收到提示符 : ✅
+  ✅ 控制台可以输入
+
+$ python tools/serial_cmd.py -p COM6 -c "btsh_light state"
+  service UUID : 0xff00
+  cmd   UUID   : 0xff01 (write)
+  LED device   : /dev/leds0 (fd=3)
+  light state  : OFF
+```
+
+**误判原因**：`serial_log.py` 是**只读**的日志工具 —— 为了绝不触发复位，
+它刻意不向串口写任何字节（连 DTR/RTS 都不碰）。在那个窗口敲键盘当然没反应。
+
+**正确做法**：要在 `nsh>` 里敲命令，用交互式终端
+
+```bash
+python tools/console.py -p COM6            # 交互式（stdin <-> 串口）
+python tools/serial_cmd.py -p COM6 -c "help"   # 发一条命令并打印回应
+```
+
+三个串口工具的分工：
+
+| 工具 | 用途 | 会写串口吗 |
+|---|---|---|
+| `serial_log.py` | 长时间抓日志、断线重连、带时间戳 | ❌ 只读（绝不干扰板子） |
+| `console.py` | 在 `nsh>` 里敲命令 | ✅ 交互 |
+| `serial_cmd.py` | 脚本化发一条命令、自动判定 | ✅ 单次 |
+
+`esp_usbserial.c` 的 RX 通路本身是完整的（`esp_attach`/`esp_rxint`/
+`esp_rxavailable`/`esp_receive` 都在），配合 `BTSH_USBJTAG_POWERUP` 的上电补丁即可工作，
+不需要额外修改。
+
+
 ### 4.4 已知遗留问题
 
 | 问题 | 影响 | 建议 |
 |---|---|---|
 | ~~`bt_conn` 槽位泄漏~~ | **已修复**（见 4.9，`BTSH_CONN_RECLAIM` + TX 线程唤醒），实测 32 次连续连接零失败 | — |
-| USB 控制台**只能输出、不能输入** | 不能在 `nsh>` 里敲命令 | 修 `esp_usbserial.c` 的 RX 中断；临时用 UART0 + USB-TTL |
+| ~~USB 控制台只能输出不能输入~~ | **实测是好的**（`nsh>` 可正常输入）。之前误判的原因：`serial_log.py` 是**只读**日志工具（为保证绝不触发复位而不写串口），在那个窗口敲键盘自然没反应。要敲命令请用 `python tools/console.py -p COM6` | — |
 
 ---
 

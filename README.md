@@ -198,7 +198,7 @@ bash port/tools/check_firmware.sh     # 期望 PASS=35  FAIL=0
 
 | 限制 | 影响 |
 |---|---|
-| USB 控制台只能输出、不能输入 | 不能在 `nsh>` 里敲命令；可用 UART0 + USB-TTL 替代 |
+| ~~USB 控制台不能输入~~ | **实测可输入** —— 之前误判是因为 `serial_log.py` 只读；敲命令请用 `python tools/console.py -p COM6` |
 | A7Z 侧尚未开发 | C3 侧已就绪，按协议对接即可 |
 
 ---

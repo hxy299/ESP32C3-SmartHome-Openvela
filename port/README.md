@@ -257,7 +257,28 @@ make flash ESPTOOL_PORT=/dev/ttyUSB0
 
 ### 6.1 串口控制台
 
-用 **3.3V** USB-TTL 接 H1（**不要接 5V**），115200 8N1：
+**方式 A（推荐，一根 Type-C 即可）**：控制台走 **USB-Serial-JTAG**，
+插上 Type-C 就会出现一个 COM 口，115200 8N1：
+
+```bash
+python tools/console.py -p COM6          # 交互式：直接在 nsh> 里敲命令
+python tools/serial_cmd.py -p COM6 -c "help"   # 只发一条命令并打印回应
+python tools/serial_log.py -p COM6       # 只抓日志（只读，不转发键盘）
+```
+
+> ❗`serial_log.py` 是**只读**的（为保证绝不触发复位，它不向串口写任何字节），
+> 所以在那个窗口敲键盘没反应是正常的 —— 敲命令请用 `console.py`。
+
+实测可用的 nsh 命令：
+
+```
+nsh> help
+nsh> btsh_light state      ← 打印服务 UUID / LED 设备 / 当前状态
+nsh> btsh_light test       ← 灯带自检
+nsh> ps                    ← 看内核线程
+```
+
+**方式 B（备用）**：用 **3.3V** USB-TTL 接 H1（**不要接 5V**），115200 8N1：
 
 | H1 排针 | 模组引脚 | 接到 USB-TTL |
 |---|---|---|
@@ -265,9 +286,8 @@ make flash ESPTOOL_PORT=/dev/ttyUSB0
 | RXD | **GPIO20**（UART0 RX） | ← 适配器 **TX** |
 | GND | GND | ↔ 适配器 **GND**（必须共地） |
 
-
-
 ```
+
 NuttShell (NSH) NuttX-...
 nsh>
 ```
@@ -747,4 +767,4 @@ CONFIG_ESP32C3_GENERIC_WS2812=y                 # 灯带
 | 问题 | 影响 | 建议 |
 |---|---|---|
 | ~~`bt_conn` 槽位泄漏~~ | **已修复**（`bt_conn_reclaim` + 唤醒 TX 线程，见 MEMORY.md 4.9）——实测 **32 次连续连接零失败**，无需再手动复位 | — |
-| USB 控制台**只能输出、不能输入**（收不到键盘） | 不能直接在 `nsh>` 里敲命令 | 修 `esp_usbserial.c` 的 RX 中断通路；临时可用 UART0 + USB-TTL |
+| ~~USB 控制台只能输出不能输入~~ | **实测是好的**（`nsh>` 可正常输入）。之前误判的原因：`serial_log.py` 是**只读**日志工具（为保证绝不触发复位而不写串口），在那个窗口敲键盘自然没反应。要敲命令请用 `python tools/console.py -p COM6` | — |
