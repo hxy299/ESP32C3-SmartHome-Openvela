@@ -341,7 +341,8 @@ port/
 ├── esp32c3_ws2812.c             板级 WS2812 初始化
 ├── esp_atomic_stubs.c           rv32imc 的 __atomic_* 实现
 ├── app-btsh_light/              已修补的 BLE 灯控应用最终版
-├── flash.ps1                    Windows 一键烧录
+├── flash.bat                    Windows 一键烧录（推荐，绕过执行策略）
+├── flash.ps1                    Windows 一键烧录脚本（UTF-8 BOM）
 ├── nuttx-production.bin         ★ 实测可用的固件
 ├── nuttx.bin                    默认固件（UART 控制台）
 └── tools/

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     ESP32-C3-SmartHome-Actuator  一键烧录（Windows 侧）
 

@@ -29,20 +29,49 @@
 
 ## 直接烧录（不用编译）
 
+三条路，任选一条：
+
+### 方式 1：`flash.bat`（Windows 最省事，推荐）
+
+```powershell
+cd port
+.\flash.bat -Port COM6 -NuttxBin .\nuttx-production.bin
+```
+
+### 方式 2：`flash.ps1`
+
+如果 PowerShell 允许运行脚本：
+
 ```powershell
 cd port
 .\flash.ps1 -Port COM6 -NuttxBin .\nuttx-production.bin
 ```
 
-或者手动：
+如果报"**在此系统上禁止运行脚本**"，用这条绕过（不改系统设置）：
 
-```
-esptool --chip esp32c3 --port COM6 --baud 921600 write_flash ^
-        -fs 4MB -fm dio -ff 80m 0x0 nuttx-production.bin
+```powershell
+powershell -ExecutionPolicy Bypass -File .\flash.ps1 -Port COM6 -NuttxBin .\nuttx-production.bin
 ```
 
-- **偏移 `0x0000`**：本项目用 `SIMPLE_BOOT` 直接启动，**不需要 Bootloader、不需要分区表**
-- 需要重烧且连不上时：**短接 GPIO9 到 GND 再复位**（本板没有 BOOT 键）
+想永久允许脚本（只需一次）：
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+### 方式 3：直接调 esptool（不依赖任何脚本）
+
+```powershell
+esptool --chip esp32c3 --port COM6 --baud 921600 write_flash -fs 4MB -fm dio -ff 80m 0x0 nuttx-production.bin
+```
+
+---
+
+**关键参数说明**：
+
+- **偏移必须是 `0x0000`** —— 本项目用 `SIMPLE_BOOT` 直接启动，**不需要 Bootloader、不需要分区表**
+- 烧录前先关掉占用串口的程序（`serial_log.py` / 串口助手）
+- 需要重烧但连不上：**短接 GPIO9 到 GND 再复位**（本板没有 BOOT 键）
 
 烧完打开串口（115200）应看到：
 
@@ -52,11 +81,14 @@ nsh>
 BTSH: boot LED test done
 BTSH: GATT service 0xff00 registered (8 attrs)
 BTSH: advertising as "BTSH-LIGHT"
+BTSH: discovery adv: company=0xffff ver=1 type=1 leds=5 caps=0x07
 ```
 
 然后手机装 nRF Connect，扫 `BTSH-LIGHT` → 连接 → 读 `0xFF03` 应得 `01 01 00`。
 
----
+> **遇到显示 `NuttX` 或扫不到厂商数据？** 那是 Windows/安卓的蓝牙缓存。
+> 在系统设置里删除该设备、或在 nRF Connect 里 Clear cache 后再扫即可。
+> 固件侧的广播字节可用 `port/tools/patch_adv_dump.sh` 验证（见 MEMORY.md 4.6/4.7）。
 
 ## 从源码构建
 
