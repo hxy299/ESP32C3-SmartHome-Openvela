@@ -73,7 +73,7 @@ s = s.replace(old, new, 1); n += 1
 # ------------------------------------------------------------------ 数组扩容
 old = '''static struct bt_eir_s g_adv_data[2];
 static struct bt_eir_s g_scan_rsp[2];'''
-new = '''static struct bt_eir_s g_adv_data[3];   /* flags + 厂商数据 + 终止项 */
+new = '''static struct bt_eir_s g_adv_data[4];   /* flags + 厂商数据 + 名字 + 终止项 */
 static struct bt_eir_s g_scan_rsp[2];'''
 assert old in s, 'g_adv_data 定义没找到'
 s = s.replace(old, new, 1); n += 1
@@ -104,8 +104,22 @@ new = '''  g_adv_data[0].len     = 2;
   g_adv_data[1].data[4] = CONFIG_BTSH_LIGHT_LED_COUNT;
   g_adv_data[1].data[5] = BTSH_DISC_CAPS;
 
-  g_adv_data[2].len     = 0;
-  g_adv_data[2].type    = 0;'''
+  /* BTSH_NAME_IN_ADV: 设备名也放进广播包
+   *
+   * 名字原先只在扫描响应里。某些中心设备（如 Windows 的 WinRT 栈）可能
+   * 不发 SCAN_REQ 或拿不到扫描响应，于是完全看不到名字，只能靠厂商数据
+   * 识别。把名字同时放进 ADV_IND 后，被动扫描也能看到。
+   *
+   * 广播总长：3(flags) + 8(厂商) + 12(名字) = 23 字节，未超 31 上限。
+   */
+
+  g_adv_data[2].len  = strlen(CONFIG_BTSH_LIGHT_ADV_NAME) + 1;
+  g_adv_data[2].type = BT_EIR_NAME_COMPLETE;
+  memcpy(g_adv_data[2].data, CONFIG_BTSH_LIGHT_ADV_NAME,
+         strlen(CONFIG_BTSH_LIGHT_ADV_NAME) + 1);
+
+  g_adv_data[3].len     = 0;
+  g_adv_data[3].type    = 0;'''
 assert old in s, '广播数据填装代码没找到'
 s = s.replace(old, new, 1); n += 1
 

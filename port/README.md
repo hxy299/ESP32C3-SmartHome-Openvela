@@ -688,6 +688,17 @@ BTSH: discovery adv: company=0xffff ver=1 type=1 leds=5 caps=0x07
 
 **结论：服务发现、读、写、通知、逐灯 RGB 全部实测通过。**
 
+### 9.1b Windows（WinRT / bleak）实测
+
+手机通过后又暴露出**两个只在 Windows 才复现**的问题（详见 MEMORY.md 4.8）：
+
+| # | 问题 | 现象 |
+|---|---|---|
+| 4 | 栈里把 MTU 527 判为非法并拒绝 | `connect()` 30 秒超时（服务发现无法开始） |
+| 5 | 应用写回调返回 `OK` 而非字节数 | `Protocol Error 0x0E`，但灯其实已亮 |
+
+两个都修好后，Windows 侧 `python tools/ble_client.py --selftest` **全部通过**。
+
 ### 9.2 上板前无法发现的问题（三个，全在协议栈里）
 
 | # | 问题 | 上板后的现象 | 定位方法 |

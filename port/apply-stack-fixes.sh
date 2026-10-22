@@ -25,7 +25,7 @@ echo " 协议栈修复（现场调试所得）"
 echo "=============================================="
 
 #----------------------------------------------------------------------------
-echo "[1/4] bt_att.c : 先保存 opcode 再 consume"
+echo "[1/6] bt_att.c : 先保存 opcode 再 consume"
 python3 - "$ATT" <<'PYEOF'
 import io, sys
 p = sys.argv[1]
@@ -92,7 +92,7 @@ print('  patched')
 PYEOF
 
 #----------------------------------------------------------------------------
-echo "[2/4] bt_gatt.c : gatt_ccc_changed 的 NULL 保护"
+echo "[2/6] bt_gatt.c : gatt_ccc_changed 的 NULL 保护"
 python3 - "$GATT" <<'PYEOF'
 import io, sys
 p = sys.argv[1]
@@ -120,7 +120,7 @@ print('  patched')
 PYEOF
 
 #----------------------------------------------------------------------------
-echo "[3/4] 应用 : CCC 传真实回调（不能传 NULL）"
+echo "[3/6] 应用 : CCC 传真实回调（不能传 NULL）"
 python3 - "$APP" <<'PYEOF'
 import io, sys
 p = sys.argv[1]
@@ -162,7 +162,91 @@ print('  patched')
 PYEOF
 
 #----------------------------------------------------------------------------
-echo "[4/4] 生成 production 配置（关闭主机流控 + 放宽连接槽位）"
+echo "[4/6] bt_att.c : MTU 请求钳位（不要拒绝）"
+python3 - "$ATT" <<'PYEOF_INNER'
+import io, re, sys
+p = sys.argv[1]
+s = io.open(p, encoding='utf-8').read()
+if 'BTSH_MTU_CLAMP' in s:
+    print('  skip'); sys.exit(0)
+
+m = re.search(
+    r'  mtu = BT_LE162HOST\(req->mtu\);\s*\n\s*\n(\s*)(?:wlinfo\("Client MTU[^\n]*\n\s*\n)?'
+    r'\s*if \(mtu > BT_ATT_MAX_LE_MTU \|\| mtu < BT_ATT_DEFAULT_LE_MTU\)\s*\n\s*\{\s*\n'
+    r'\s*return BT_ATT_ERR_INVALID_PDU;\s*\n\s*\}', s)
+assert m, 'att_mtu_req 里的范围检查没找到'
+
+repl = '''  mtu = BT_LE162HOST(req->mtu);
+
+  /* BTSH_MTU_CLAMP: 超出范围的 MTU 请求要**钳位**，不能直接拒绝。
+   *
+   * 原实现遇到 mtu > 517 或 < 23 就 return BT_ATT_ERR_INVALID_PDU。
+   * Windows(WinRT) 实际请求 527，于是被拒；中心设备拿不到 MTU 响应就
+   * 不敢继续做服务发现，表现为 connect() 30 秒超时。Android(nRF Connect)
+   * 恰好请求合法值，所以同一个固件在手机上正常 —— 极难排查。
+   *
+   * 按 BLE 规范，服务器应在响应里给出自己支持的 MTU，请求过大时回一个小值。
+   */
+
+  syslog(LOG_INFO, "BTSH: MTU req=%u\\n", mtu);
+
+  if (mtu < BT_ATT_DEFAULT_LE_MTU)
+    {
+      mtu = BT_ATT_DEFAULT_LE_MTU;
+    }
+  else if (mtu > BT_ATT_MAX_LE_MTU)
+    {
+      mtu = BT_ATT_MAX_LE_MTU;
+    }'''
+
+s = s[:m.start()] + repl + s[m.end():]
+
+if '#include <syslog.h>' not in s:
+    s = s.replace('#include <string.h>', '#include <string.h>\n#include <syslog.h>', 1)
+
+io.open(p, 'w', encoding='utf-8').write(s)
+print('  patched')
+PYEOF_INNER
+
+#----------------------------------------------------------------------------
+echo "[5/6] 应用 : GATT 写回调返回 len（不是 OK）"
+python3 - "$APP" <<'PYEOF_INNER2'
+import io, sys
+p = sys.argv[1]
+s = io.open(p, encoding='utf-8').read()
+if 'BTSH_WRITE_RET_LEN' in s:
+    print('  skip'); sys.exit(0)
+
+start = s.index('static int btsh_write_cmd(FAR struct bt_conn_s *conn,')
+end = s.index('static void btsh_light_connected_cb', start)
+body = s[start:end]
+
+new_body = body.replace('  return OK;\n', '''  /* BTSH_WRITE_RET_LEN: GATT 写回调必须返回**写入的字节数**。
+   *
+   * 协议栈 bt_att.c 的 write_cb：
+   *     write = attr->write(...);
+   *     if (write < 0 || write != data->len) { data->err = err_to_att(write); ... }
+   *
+   * 返回 OK(0) 时 len=1 -> 0 != 1 成立 -> err_to_att(0) 落到 default ->
+   * BT_ATT_ERR_UNLIKELY(0x0E)，对端收到错误响应。
+   *
+   * 表现：手机用"无响应写"完全正常，Windows 用"带响应写"报
+   *       Protocol Error 0x0E: Unlikely Error（但灯其实已亮）。
+   */
+
+  return len;
+''')
+if new_body == body:
+    print('  !! 没找到 return OK')
+    sys.exit(0)
+
+s = s[:start] + new_body + s[end:]
+io.open(p, 'w', encoding='utf-8').write(s)
+print('  patched')
+PYEOF_INNER2
+
+#----------------------------------------------------------------------------
+echo "[6/6] 生成 production 配置（关闭主机流控 + 放宽连接槽位）"
 P=$(cd "$(dirname "$0")" && pwd)
 B=$N/boards/risc-v/esp32c3/esp32c3-generic
 VB=$V/vendor/espressif/boards/esp32c3/esp32c3-generic

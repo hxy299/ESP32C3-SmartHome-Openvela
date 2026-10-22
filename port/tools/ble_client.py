@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import platform
 import sys
 
 try:
@@ -77,32 +78,108 @@ DEFAULT_NAME = "BTSH-LIGHT"
 
 
 # ---------------------------------------------------------------------------
+# 连接（Windows 上必须绕开 GATT 服务缓存）
+# ---------------------------------------------------------------------------
+
+CONNECT_TIMEOUT = 40.0
+
+
+def client_kwargs():
+    """BTSH_WINRT_NOCACHE
+
+    Windows 的 WinRT 后端会**缓存每个设备的 GATT 服务表**。
+    一旦设备固件的服务表变过（本项目的固件改过很多次），缓存就是坏的，
+    表现为 connect() 时 get_services() 一直超时。
+
+    use_cached_services=False 强制每次重新发现。
+    """
+
+    if platform.system() == "Windows":
+        return {"winrt": {"use_cached_services": False}}
+    return {}
+
+
+# ---------------------------------------------------------------------------
 # 设备发现
 # ---------------------------------------------------------------------------
 
+class _AdvView:
+    """把合并后的广播记录包装成"像 AdvertisementData"的对象。
+
+    这样 decode_btsh_adv / scan 输出都能用同一套字段名。
+    """
+
+    __slots__ = ("local_name", "manufacturer_data", "rssi")
+
+    def __init__(self, rec):
+        self.local_name = rec.get("name")
+        self.manufacturer_data = dict(rec.get("mfr") or {})
+        self.rssi = rec.get("rssi")
+
+
+def merge_scan(timeout):
+    """返回 (异步函数, 结果字典)。
+
+    扫描 timeout 秒，把每个地址收到的所有广播合并到
+    {"dev", "name", "mfr", "rssi"}。
+    """
+
+    merged = {}
+
+    def cb(dev, adv):
+        rec = merged.setdefault(dev.address,
+                                {"dev": dev, "name": None, "mfr": {},
+                                 "rssi": None})
+        n = getattr(adv, "local_name", None) or dev.name
+        if n:
+            rec["name"] = n
+        for cid, payload in (getattr(adv, "manufacturer_data", None) or {}).items():
+            rec["mfr"][cid] = payload
+        r = getattr(adv, "rssi", None) or dev.rssi
+        if r is not None:
+            rec["rssi"] = r
+
+    async def _run():
+        async with BleakScanner(detection_callback=cb):
+            await asyncio.sleep(timeout)
+
+    return _run, merged
+
+
 async def find_device(name: str, address: str | None, timeout: float = 8.0):
-    """返回 (BleakDevice, adv_data)；找不到返回 (None, None)。"""
+    """返回 (BleakDevice, adv_data)；找不到返回 (None, None)。
+
+    BTSH_FIND_BY_MFR: 优先按**厂商自定义数据**识别，其次才按名字。
+    原因：名字在扫描响应里，某些协议栈（如 Windows）可能拿不到，
+    而厂商数据在广播包里，被动扫描就能看到 —— 这正是 v1.1 的设计目的。
+    """
 
     if address:
         print(f"按地址连接 {address} ...")
         return address, None
 
-    print(f"扫描 {timeout:.0f}s，查找 '{name}' ...")
+    print(f"扫描 {timeout:.0f}s，查找 '{name}'（优先按厂商数据识别）...")
+
+    # BTSH_MERGE_ADV：Windows/bleak 在扫描响应到达时会把这一帧的
+    # manufacturer_data 覆盖成空，导致"有时能识别、有时不能"。
+    # 用 merge_scan 按地址累积合并即可。
+    _run, merged = merge_scan(timeout)
+    await _run()
+
     found = {}
-
-    def cb(dev, adv):
-        dev_name = adv.local_name or dev.name
-        if dev_name and name.lower() in dev_name.lower():
-            found[dev.address] = (dev, adv)
-
-    async with BleakScanner(detection_callback=cb):
-        await asyncio.sleep(timeout)
+    for addr, rec in merged.items():
+        adv_view = _AdvView(rec)
+        if decode_btsh_adv(adv_view):
+            found[addr] = (rec["dev"], adv_view, "厂商数据")
+        elif rec["name"] and name.lower() in rec["name"].lower():
+            found[addr] = (rec["dev"], adv_view, "名字")
 
     if not found:
         return None, None
 
-    addr, (dev, adv) = next(iter(found.items()))
-    print(f"找到 {dev.name}  [{addr}]  RSSI={adv.rssi}")
+    addr, (dev, adv, how) = next(iter(found.items()))
+    shown = adv.local_name or dev.name or "(无名字)"
+    print(f"找到 {shown}  [{addr}]  RSSI={adv.rssi}  (通过{how}识别)")
     return dev, adv
 
 
@@ -347,9 +424,17 @@ async def run(args):
         print("   2) 板子是否上电、BLE 是否初始化成功（看串口日志）")
         return 2
 
-    async with BleakClient(target, timeout=20.0) as client:
+    try:
+        client_cm = BleakClient(target, timeout=CONNECT_TIMEOUT,
+                                **client_kwargs())
+    except TypeError:
+        # 老版本 bleak 不认 backend 参数
+        client_cm = BleakClient(target, timeout=CONNECT_TIMEOUT)
+
+    async with client_cm as client:
         if not client.is_connected:
             print("❌ 连接失败")
+            print("   提示：Windows 上请先在 设置->蓝牙和设备 里删除该设备（清缓存）后重试")
             return 3
         print(f"✅ 已连接 {target}\n")
 
@@ -402,6 +487,11 @@ def main():
 
     try:
         sys.exit(asyncio.run(run(args)))
+    except (asyncio.TimeoutError, TimeoutError):
+        print("\n❌ 连接/服务发现超时")
+        print("   最常见原因：Windows 缓存了旧的服务表")
+        print("   处理：设置 -> 蓝牙和设备 -> 删除该设备 -> 重新运行")
+        sys.exit(4)
     except KeyboardInterrupt:
         print("\n中断")
         sys.exit(130)

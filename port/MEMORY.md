@@ -219,6 +219,93 @@ BTSH_ADV_DUMP: rsp len=12 [0b09425453482d4c49474854]
 ```
 
 
+### 4.8 补记：Windows 才能复现的两个 bug（v1.1 收尾）
+
+手机 nRF Connect 全通之后，Windows 仍然连接超时。加 ATT 跟踪后定位到两个问题，
+**都只在 Windows（WinRT）的请求方式下暴露**：
+
+#### bug 4：MTU 请求被"非法值"拒绝
+
+```
+[12.301s] BTSH: central connected
+[12.418s] BTSH: MTU req=527          ← Windows 请求 527
+[BTSH_ATT_TRACE] rx code=0x02 len=3
+[BTSH_ATT_TRACE] handled code=0x02 err=0x04    ← 回了 INVALID_PDU
+```
+
+协议栈原代码：
+
+```c
+if (mtu > BT_ATT_MAX_LE_MTU || mtu < BT_ATT_DEFAULT_LE_MTU)
+  {
+    return BT_ATT_ERR_INVALID_PDU;      /* 517 上限，Windows 要 527 */
+  }
+```
+
+中心设备拿不到 MTU 响应，就**不敢继续做服务发现** → `connect()` 30 秒超时。
+Android 恰好请求合法值（517），所以同一个固件在手机上正常。
+
+**修法**：按规范钳位，而不是拒绝 —— 服务器回自己支持的 MTU 即可。
+
+#### bug 5：GATT 写回调返回 `OK` 而不是字节数
+
+```c
+/* 协议栈 bt_att.c 的 write_cb */
+write = attr->write(conn, attr, data->value, data->len, data->offset);
+if (write < 0 || write != data->len)
+  {
+    data->err = err_to_att(write);      /* write==0 -> default -> 0x0E */
+    return BT_GATT_ITER_STOP;
+  }
+```
+
+应用原来 `return OK;`（=0），而 `data->len` 是 1 或 4 → `0 != len` 成立 →
+`err_to_att(0)` 落到 default 分支 → `BT_ATT_ERR_UNLIKELY (0x0E)`。
+
+**表现极具迷惑性**：
+
+| 对端 | 用的写方式 | 结果 |
+|---|---|---|
+| 手机 nRF Connect | Write **Without** Response | 完全正常，灯亮 |
+| Windows / bleak | Write **With** Response | 报 `Protocol Error 0x0E: Unlikely Error`，**但灯其实已经亮了** |
+
+**修法**：写回调返回实际写入的字节数（`return len;`）。
+
+#### 验证结果（Windows，2026-10-22）
+
+```
+✅ 已连接   （通过厂商数据识别）
+设备信息: 01 01 00        ✅ 协议匹配
+[1] 订阅通知              ✅
+[2] 开灯 → notify 01 → 状态 01    ✅
+[3] 关灯 → notify 00 → 状态 00    ✅
+[4] 逐灯 RGB（红/绿/蓝）  ✅
+[5] 全部熄灭              ✅
+[6] 收到 4 条通知          ✅
+自检结果: ✅ 全部通过
+```
+
+板子侧日志对应：
+
+```
+[14.222s] BTSH: MTU req=527
+[15.323s] BTSH: 5 LED(s) -> ON
+[17.343s] BTSH: rgb[0] = 30 00 00
+[17.642s] BTSH: rgb[1] = 00 30 00
+[17.941s] BTSH: rgb[2] = 00 00 30
+[18.358s] BTSH: rgb[255] = 00 00 00
+```
+
+#### 教训
+
+**"手机上能用"不等于"协议实现正确"。** 两个 bug 都是被 Android 的宽松行为掩盖的：
+
+1. Android 请求合法 MTU（517），Windows 请求 527
+2. Android 可发"无响应写"，Windows 默认"带响应写"
+
+**交叉验证必须换至少两种中心设备。** 单靠手机，这两个 bug 永远不会暴露。
+
+
 ### 4.4 已知遗留问题
 
 | 问题 | 影响 | 建议 |

@@ -183,7 +183,8 @@ bash port/tools/check_firmware.sh     # 期望 PASS=35  FAIL=0
 | 开启通知（写 CCC） | ✅ |
 | 写 4 字节 RGB | ✅ 第 1 颗灯变红 |
 | 状态通知 | ✅ |
-| 广播能力声明（v1.1） | 编译通过，待烧录复核 |
+| 广播能力声明（v1.1） | ✅ 广播含厂商数据，可免连接识别 |
+| Windows 全链路（v1.1） | ✅ `ble_client.py --selftest` 全部通过 |
 
 **上板才发现的 3 个协议栈 bug**（全部已修，见 [port/README.md](port/README.md) §9）：
 
