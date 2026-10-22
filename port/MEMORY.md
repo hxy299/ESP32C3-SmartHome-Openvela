@@ -306,11 +306,81 @@ if (write < 0 || write != data->len)
 **交叉验证必须换至少两种中心设备。** 单靠手机，这两个 bug 永远不会暴露。
 
 
+### 4.9 补记：连接槽位泄漏 —— 已修复（v1.1 收尾）
+
+#### 现象
+
+连续连接约 **8 次**后就再也连不上，必须复位。`MAX_CONN=8` 正好对应这个数字。
+
+#### 定位：把连接池打出来看
+
+在 `bt_conn.c` 里加临时 dump，每次断开后打印每个槽位：
+
+```
+[16.332s] BTSH_CONN [0] inuse=1 ref=14 state=0
+[26.362s] BTSH_CONN [0] inuse=1 ref=12 ; [1] inuse=1 ref=13
+[36.192s] BTSH_CONN [0] ref=12 ; [1] ref=12 ; [2] ref=13
+```
+
+**每连一次占一个新槽位，旧槽位永远 `inuse=1`，引用计数卡在 12~14 不归零。**
+再往下连，`btController` 任务还会触发断言 PANIC（表现为"设备从扫描列表消失"）。
+
+#### 根因
+
+`conn_tx_kthread()` 是**每个连接一个**的内核线程，它持有该连接的一个引用，
+退出时才 `bt_conn_release()` 归还。而它的等待顺序是：
+
+```c
+while (conn->state == BT_CONN_CONNECTED)
+  {
+    nxsem_wait_uninterruptible(&g_btdev.le_pkts_sem);   /* 等 ACL 额度 */
+    if (conn->state != BT_CONN_CONNECTED) break;
+```
+
+断开时协议栈只往 **tx_queue** 塞了一个 `BT_DUMMY`（用于唤醒"等在队列上"的线程），
+但线程多半是**卡在 `le_pkts_sem` 上**的 —— 没有对端数据就没有额度事件，于是
+线程永远不醒、永远不退出、引用永远不还。
+
+#### 修法（两处）
+
+1. `bt_conn_set_state()` 的 DISCONNECTED 分支：额外 `nxsem_post(&g_btdev.le_pkts_sem)`
+   唤醒 TX 线程，让它看到状态已变、正常退出并归还引用。
+   （标记 `BTSH_TXTHREAD_WAKEUP`）
+
+2. 新增 `bt_conn_reclaim()`，在 `hci_disconn_complete()` 里 `bt_conn_release()` 之后调用，
+   **断开流程走完就强制归还槽位**（`ref=0`、`dst=ANY`）。
+   因为本树的引用计数在断开后本来就无法归零，继续保留引用没有意义。
+   （标记 `BTSH_CONN_RECLAIM`）
+
+#### 验证：32 次连续连接，零失败
+
+用 `port/tools/ble_stress.py` 实测（同一份固件、全程未复位）：
+
+```
+=== 连接压力测试：连续 20 次 连接→读信息→断开 ===
+  [ 1/20] ✅ 01 01 00   1389 ms
+  ...
+  [20/20] ✅ 01 01 00   1629 ms
+  成功 20 / 20   失败 0
+  ✅ 全部成功：连接槽位没有泄漏
+```
+
+加上前一轮 12 次，累计 **32 次连接全部成功**，远超旧的 8 次上限。
+
+#### 调试这个问题的两个经验
+
+1. **别猜，把数据结构打出来。** 连接池 dump 一打，泄漏位置（哪个槽位、
+   ref 多少）立刻清楚。
+2. **压力测试要能区分"板子问题"和"主机问题"。** 本次有一轮 0/25 全失败，
+   复查发现板子在正常广播、`ble_client.py --scan` 也能看到——
+   是 Windows 适配器在频繁连断后卡住了。重跑即 12/12。
+
+
 ### 4.4 已知遗留问题
 
 | 问题 | 影响 | 建议 |
 |---|---|---|
-| `bt_conn` 槽位回收不完整（断开后引用计数停在 1） | 连续连接约 8 次后需复位（已把 `MAX_CONN` 放宽到 8 缓解） | 追 `bt_smp_connected`/`bt_att_connected` 的 addref 是否配对 |
+| ~~`bt_conn` 槽位泄漏~~ | **已修复**（见 4.9，`BTSH_CONN_RECLAIM` + TX 线程唤醒），实测 32 次连续连接零失败 | — |
 | USB 控制台**只能输出、不能输入** | 不能在 `nsh>` 里敲命令 | 修 `esp_usbserial.c` 的 RX 中断；临时用 UART0 + USB-TTL |
 
 ---

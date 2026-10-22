@@ -25,7 +25,7 @@ echo " 协议栈修复（现场调试所得）"
 echo "=============================================="
 
 #----------------------------------------------------------------------------
-echo "[1/6] bt_att.c : 先保存 opcode 再 consume"
+echo "[1/7] bt_att.c : 先保存 opcode 再 consume"
 python3 - "$ATT" <<'PYEOF'
 import io, sys
 p = sys.argv[1]
@@ -92,7 +92,7 @@ print('  patched')
 PYEOF
 
 #----------------------------------------------------------------------------
-echo "[2/6] bt_gatt.c : gatt_ccc_changed 的 NULL 保护"
+echo "[2/7] bt_gatt.c : gatt_ccc_changed 的 NULL 保护"
 python3 - "$GATT" <<'PYEOF'
 import io, sys
 p = sys.argv[1]
@@ -120,7 +120,7 @@ print('  patched')
 PYEOF
 
 #----------------------------------------------------------------------------
-echo "[3/6] 应用 : CCC 传真实回调（不能传 NULL）"
+echo "[3/7] 应用 : CCC 传真实回调（不能传 NULL）"
 python3 - "$APP" <<'PYEOF'
 import io, sys
 p = sys.argv[1]
@@ -162,7 +162,7 @@ print('  patched')
 PYEOF
 
 #----------------------------------------------------------------------------
-echo "[4/6] bt_att.c : MTU 请求钳位（不要拒绝）"
+echo "[4/7] bt_att.c : MTU 请求钳位（不要拒绝）"
 python3 - "$ATT" <<'PYEOF_INNER'
 import io, re, sys
 p = sys.argv[1]
@@ -209,7 +209,7 @@ print('  patched')
 PYEOF_INNER
 
 #----------------------------------------------------------------------------
-echo "[5/6] 应用 : GATT 写回调返回 len（不是 OK）"
+echo "[5/7] 应用 : GATT 写回调返回 len（不是 OK）"
 python3 - "$APP" <<'PYEOF_INNER2'
 import io, sys
 p = sys.argv[1]
@@ -246,7 +246,65 @@ print('  patched')
 PYEOF_INNER2
 
 #----------------------------------------------------------------------------
-echo "[6/6] 生成 production 配置（关闭主机流控 + 放宽连接槽位）"
+echo "[6/7] bt_conn : 断开后强制回收连接槽位"
+python3 - <<'PYEOF_INNER'
+import io, sys
+V = __import__('os').environ.get('VELA_ROOT', __import__('os').path.expanduser('~') + '/openvela')
+N = V + '/nuttx'
+CONN = N + '/wireless/bluetooth/bt_conn.c'
+HDR = N + '/wireless/bluetooth/bt_conn.h'
+HCI = N + '/wireless/bluetooth/bt_hcicore.c'
+
+s = io.open(CONN, encoding='utf-8').read()
+if 'BTSH_CONN_RECLAIM' in s:
+    print('  skip'); sys.exit(0)
+
+# 1) bt_conn.c: 前向声明 + 实现
+s = s.replace('void bt_conn_release(FAR struct bt_conn_s *conn)\n{',
+              'void bt_conn_reclaim(FAR struct bt_conn_s *conn);\n\n'
+              'void bt_conn_release(FAR struct bt_conn_s *conn)\n{', 1)
+
+marker = '  bt_addr_le_copy(&conn->dst, BT_ADDR_LE_ANY);\n}\n'
+idx = s.index(marker, s.index('void bt_conn_release(FAR struct bt_conn_s *conn)'))
+end = idx + len(marker)
+
+impl = """
+
+void bt_conn_reclaim(FAR struct bt_conn_s *conn)
+{
+  if (conn->state != BT_CONN_DISCONNECTED)
+    {
+      return;
+    }
+
+  bt_atomic_set(&conn->ref, 0);
+  bt_addr_le_copy(&conn->dst, BT_ADDR_LE_ANY);
+}
+"""
+s = s[:end] + impl + s[end:]
+io.open(CONN, 'w', encoding='utf-8').write(s)
+
+# 2) 头文件声明
+h = io.open(HDR, encoding='utf-8').read()
+if 'bt_conn_reclaim' not in h:
+    h = h.replace('void bt_conn_release(FAR struct bt_conn_s *conn);',
+                  'void bt_conn_release(FAR struct bt_conn_s *conn);\n\n'
+                  '/* BTSH_CONN_RECLAIM */\nvoid bt_conn_reclaim(FAR struct bt_conn_s *conn);', 1)
+    io.open(HDR, 'w', encoding='utf-8').write(h)
+
+# 3) 断开流程里调用
+c = io.open(HCI, encoding='utf-8').read()
+if 'bt_conn_reclaim(conn)' not in c:
+    c = c.replace('  bt_conn_release(conn);\n\n  if (g_btdev.adv_enable)',
+                  '  bt_conn_release(conn);\n\n  bt_conn_reclaim(conn);\n\n'
+                  '  if (g_btdev.adv_enable)', 1)
+    io.open(HCI, 'w', encoding='utf-8').write(c)
+
+print('  patched')
+PYEOF_INNER
+
+#----------------------------------------------------------------------------
+echo "[7/7] 生成 production 配置（关闭主机流控 + 放宽连接槽位）"
 P=$(cd "$(dirname "$0")" && pwd)
 B=$N/boards/risc-v/esp32c3/esp32c3-generic
 VB=$V/vendor/espressif/boards/esp32c3/esp32c3-generic

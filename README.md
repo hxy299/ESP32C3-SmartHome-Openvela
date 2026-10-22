@@ -198,7 +198,6 @@ bash port/tools/check_firmware.sh     # 期望 PASS=35  FAIL=0
 
 | 限制 | 影响 |
 |---|---|
-| `bt_conn` 槽位回收不完整 | 连续连接约 8 次后需复位（已把 `MAX_CONN` 放宽到 8 缓解） |
 | USB 控制台只能输出、不能输入 | 不能在 `nsh>` 里敲命令；可用 UART0 + USB-TTL 替代 |
 | A7Z 侧尚未开发 | C3 侧已就绪，按协议对接即可 |
 

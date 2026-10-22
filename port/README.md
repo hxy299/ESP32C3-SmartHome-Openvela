@@ -737,7 +737,7 @@ CONFIG_SYSLOG_CONSOLE=y                         # syslog 输出到控制台
 CONFIG_DEVICE_LOCAL_NAME="BTSH-LIGHT"           # ★ 广播名（默认 "NuttX"）
 CONFIG_DEVICE_NAME="BTSH-LIGHT"                 # ★ GAP 设备名特征（默认 "Apache NuttX"）
 CONFIG_BLUETOOTH_CNTRL_HOST_FLOW_DISABLE=y      # ★ 关流控，否则 ACL 收不到
-CONFIG_BLUETOOTH_MAX_CONN=8                     # ★ 本树 bt_conn 回收有缺陷，放宽槽位
+CONFIG_BLUETOOTH_MAX_CONN=8                     # 连接槽位数（泄漏已修，8 个足够）
 CONFIG_ESP32C3_GENERIC_BTSH_AUTOSTART=y         # 开机自动广播
 CONFIG_ESP32C3_GENERIC_WS2812=y                 # 灯带
 ```
@@ -746,5 +746,5 @@ CONFIG_ESP32C3_GENERIC_WS2812=y                 # 灯带
 
 | 问题 | 影响 | 建议 |
 |---|---|---|
-| `bt_conn` 槽位回收不干净（断开后引用计数停在 1） | 连续连接约 8 次后需要重启（`MAX_CONN=8` 可缓解） | 追 `bt_smp_connected`/`bt_att_connected` 里的 addref 是否配对；或长期在 `hci_disconn_complete` 末尾强制回收 |
+| ~~`bt_conn` 槽位泄漏~~ | **已修复**（`bt_conn_reclaim` + 唤醒 TX 线程，见 MEMORY.md 4.9）——实测 **32 次连续连接零失败**，无需再手动复位 | — |
 | USB 控制台**只能输出、不能输入**（收不到键盘） | 不能直接在 `nsh>` 里敲命令 | 修 `esp_usbserial.c` 的 RX 中断通路；临时可用 UART0 + USB-TTL |
