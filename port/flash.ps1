@@ -97,22 +97,22 @@ Write-Host "[烧录] nuttx.bin -> 0x0000" -ForegroundColor Yellow
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
     Write-Host "烧录失败（exit $LASTEXITCODE）。排查顺序：" -ForegroundColor Red
-    Write-Host "  1) 手动进下载模式：按住 SW1(BOOT/IO9) -> 点一下 SW2(EN) 松开 -> 再松开 SW1"
-    Write-Host "  2) 降低波特率 -Baud 115200"
+    Write-Host "  1) 本板没有 BOOT 键！SW1 是用户键，与 GPIO9 无关。"
+    Write-Host "     要强制进下载模式：用杜邦线/镊子把 GPIO9 短接到 GND，再点 SW2(EN) 复位"
+    Write-Host "  2) 降低波特率：-Baud 115200"
     Write-Host "  3) 确认供电：Type-C 5V 正常、3.3V 有输出"
-    Write-Host "  4) 串口被占用？关掉串口助手/Arduino IDE 再试"
+    Write-Host "  4) 串口被占用？关掉 serial_log.py / 串口助手 / nRF 相关工具再试"
     exit 1
 }
 
 Write-Host ""
 Write-Host "烧录完成 ✅" -ForegroundColor Green
 Write-Host ""
-Write-Host "验证（3.3V USB-TTL 接 H1: TXD/RXD/GND，115200）：" -ForegroundColor Cyan
-Write-Host "  应看到 nsh> 提示符" -ForegroundColor Gray
-Write-Host "  nsh> btsh_light state     # 确认 fd=3（WS2812 已注册）" -ForegroundColor Gray
-Write-Host "  nsh> btsh_light start     # 开始广播 BTSH-LIGHT" -ForegroundColor Gray
-Write-Host ""
-Write-Host "然后用 PC 端 BLE 工具验证：" -ForegroundColor Cyan
-Write-Host "  pip install bleak" -ForegroundColor Gray
-Write-Host "  python tools\ble_client.py --scan" -ForegroundColor Gray
-Write-Host "  python tools\ble_client.py --on" -ForegroundColor Gray
+Write-Host "验证方法（无需 USB-TTL，同一根 Type-C 即可）：" -ForegroundColor Cyan
+Write-Host "  1) 串口日志（控制台走 USB-Serial-JTAG）：" -ForegroundColor Gray
+Write-Host "       python tools\serial_log.py -p $Port -b 115200" -ForegroundColor Gray
+Write-Host "     应看到 nsh> 提示符 + 几条 BTSH 日志" -ForegroundColor Gray
+Write-Host "  2) BLE 扫描（应能看到厂商能力声明）：" -ForegroundColor Gray
+Write-Host "       python tools\ble_client.py --scan" -ForegroundColor Gray
+Write-Host "  3) 全链路自检（会自动开关灯）：" -ForegroundColor Gray
+Write-Host "       python tools\ble_client.py --selftest" -ForegroundColor Gray

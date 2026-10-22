@@ -242,33 +242,45 @@ BTSH_DEVTYPE = {1: "RGB灯控"}
 
 
 def decode_btsh_adv(adv):
-    """从广播数据里解析本项目的厂商自定义数据。
+    """从广播数据里解析本项目的厂商自定义数据（严格校验）。
 
-    固件布局（蓝牙 EIR Manufacturer Specific Data）：
-        FF FF | ver(1) | devtype(1) | led_count(1) | caps(1)
-    bleak 会把前 2 字节的 Company ID 做成字典 key，所以 payload 只剩 4 字节。
+    固件布局（EIR Manufacturer Specific Data，Company ID 0xFFFF）：
+        02 01 06                          <- Flags
+        07 FF FF FF 01 01 05 07           <- 长度/类型/CompanyID/ver/类型/灯数/能力位
+
+    bleak 会把前 2 字节 Company ID 做成字典 key，所以 payload 只剩 4 字节。
+
+    ★ BTSH_STRICT_DECODE：Company ID 0xFFFF 是 BT SIG 的测试保留值，
+      很多厂商（手环、血压计等）也在用，只看 Company ID 会误判。
+      因此必须同时校验 payload 结构。
     """
 
     if adv is None:
         return None
 
     md = getattr(adv, "manufacturer_data", None) or {}
-    payload = md.get(BTSH_COMPANY_ID)
-    if not payload or len(payload) < 4:
-        return None
+    for cid, payload in md.items():
+        if len(payload) != 4:
+            continue
+        ver, dtype, leds, caps = payload[0], payload[1], payload[2], payload[3]
+        if ver != 1 or dtype != 1:
+            continue
+        if not (1 <= leds <= 32):
+            continue
+        if caps & ~0x07:
+            continue
 
-    ver, dtype, leds, caps = payload[0], payload[1], payload[2], payload[3]
-    feats = []
-    if caps & 0x01:
-        feats.append("开关")
-    if caps & 0x02:
-        feats.append("逐灯RGB")
-    if caps & 0x04:
-        feats.append("通知")
+        feats = []
+        if caps & 0x01:
+            feats.append("开关")
+        if caps & 0x02:
+            feats.append("逐灯RGB")
+        if caps & 0x04:
+            feats.append("通知")
 
-    return ("识别: {} 协议v{} {}灯 能力={}"
-            .format(BTSH_DEVTYPE.get(dtype, "类型%d" % dtype),
-                    ver, leds, ",".join(feats) or "无"))
+        return ("识别: RGB灯控 协议v{} {}灯 能力={} (company=0x{:04x})"
+                .format(ver, leds, ",".join(feats) or "无", cid))
+    return None
 
 
 async def scan_with_adv(timeout):
@@ -299,14 +311,29 @@ async def run(args):
             return (getattr(adv, "rssi", None) or d.rssi or -999)
 
         for d, adv in sorted(pairs, key=_rssi):
-            name = (d.name or (getattr(adv, "local_name", None) if adv else None) or "")
+            # 广播里的实时名字优先；d.name 是系统缓存，可能是旧值
+            live = getattr(adv, "local_name", None) if adv else None
+            name = live or d.name or ""
             rssi = _rssi((d, adv))
-            mark = "  <-- BTSH" if name.upper().startswith("BTSH") else ""
+            is_ours = name.upper().startswith("BTSH") or bool(decode_btsh_adv(adv))
+            mark = "  <-- 本项目设备" if is_ours else ""
             print(f"  {d.address}  rssi={rssi:4}  {name}{mark}")
 
-            info = decode_btsh_adv(adv)
-            if info:
-                print(f"      +- {info}")
+            if is_ours:
+                # 目标设备：把看到的原始内容全打出来，便于核对固件是否生效
+                print(f"      广播名(live) : {live}")
+                print(f"      系统缓存名   : {d.name}")
+                uuids = getattr(adv, "service_uuids", None) or []
+                if uuids:
+                    print(f"      服务UUID     : {', '.join(uuids[:4])}")
+                md = getattr(adv, "manufacturer_data", None) or {}
+                if md:
+                    for cid, payload in md.items():
+                        print(f"      厂商数据     : company=0x{cid:04x} {payload.hex()}")
+                else:
+                    print("      厂商数据     : （无）<-- 固件的新广播没生效？")
+                info = decode_btsh_adv(adv)
+                print(f"      +- {info if info else '未识别为本项目设备'}")
             elif adv is not None and getattr(adv, "manufacturer_data", None):
                 raw = {k: v.hex() for k, v in adv.manufacturer_data.items()}
                 print(f"      +- 厂商数据 {raw}")
